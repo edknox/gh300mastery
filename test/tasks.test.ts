@@ -116,10 +116,71 @@ describe("task management API", () => {
     assert.equal(deleteResponse.body.error.code, "TASK_NOT_FOUND");
   });
 
-  it("returns a consistent validation error", async () => {
+  it("rejects a missing title", async () => {
+    const response = await request(createApp()).post("/tasks").send({});
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "title must be a non-empty string",
+      },
+    });
+  });
+
+  it("rejects invalid field types", async () => {
+    const app = createApp();
+    const invalidTitle = await request(app).post("/tasks").send({
+      title: 42,
+    });
+    const invalidDescription = await request(app).post("/tasks").send({
+      title: "Valid title",
+      description: false,
+    });
+    const invalidStatus = await request(app).post("/tasks").send({
+      title: "Valid title",
+      status: 1,
+    });
+
+    assert.equal(invalidTitle.status, 400);
+    assert.equal(
+      invalidTitle.body.error.message,
+      "title must be a non-empty string",
+    );
+    assert.equal(invalidDescription.status, 400);
+    assert.equal(
+      invalidDescription.body.error.message,
+      "description must be a non-empty string",
+    );
+    assert.equal(invalidStatus.status, 400);
+    assert.equal(
+      invalidStatus.body.error.message,
+      "status must be one of: todo, in-progress, done",
+    );
+  });
+
+  it("requires every field when replacing a task", async () => {
+    const app = createApp();
+    const created = await request(app).post("/tasks").send({
+      title: "Original",
+    });
+
+    const response = await request(app)
+      .put(`/tasks/${created.body.id}`)
+      .send({ title: "Incomplete replacement" });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "description must be a non-empty string",
+      },
+    });
+  });
+
+  it("rejects an empty title", async () => {
     const response = await request(createApp()).post("/tasks").send({
       title: " ",
-      status: "blocked",
     });
 
     assert.equal(response.status, 400);
@@ -129,5 +190,60 @@ describe("task management API", () => {
         message: "title must be a non-empty string",
       },
     });
+  });
+
+  it("rejects an unsupported status", async () => {
+    const response = await request(createApp()).post("/tasks").send({
+      title: "Invalid status task",
+      status: "blocked",
+    });
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "status must be one of: todo, in-progress, done",
+      },
+    });
+  });
+
+  it("logs sanitized request metadata without sensitive values", async () => {
+    const messages: string[] = [];
+    const originalConsoleInfo = console.info;
+    console.info = (message?: unknown) => {
+      messages.push(String(message));
+    };
+
+    try {
+      const response = await request(createApp())
+        .get("/tasks/private@example.com?token=query-secret")
+        .send({ title: "private-request-body" })
+        .set("authorization", "Bearer authorization-secret");
+
+      assert.equal(response.status, 404);
+    } finally {
+      console.info = originalConsoleInfo;
+    }
+
+    assert.equal(messages.length, 1);
+    const logEntry = JSON.parse(messages[0] ?? "") as Record<string, unknown>;
+
+    assert.deepEqual(Object.keys(logEntry).sort(), [
+      "method",
+      "path",
+      "responseTimeMs",
+      "statusCode",
+      "timestamp",
+    ]);
+    assert.equal(logEntry.method, "GET");
+    assert.equal(logEntry.path, "/tasks/:segment");
+    assert.equal(logEntry.statusCode, 404);
+    assert.equal(typeof logEntry.responseTimeMs, "number");
+    assert.ok((logEntry.responseTimeMs as number) >= 0);
+    assert.equal(typeof logEntry.timestamp, "string");
+    assert.ok(!messages[0]?.includes("private@example.com"));
+    assert.ok(!messages[0]?.includes("query-secret"));
+    assert.ok(!messages[0]?.includes("authorization"));
+    assert.ok(!messages[0]?.includes("private-request-body"));
   });
 });

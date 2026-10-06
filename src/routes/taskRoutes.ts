@@ -1,3 +1,4 @@
+
 import { Router } from "express";
 
 import {
@@ -23,6 +24,16 @@ function getTaskId(value: string | string[] | undefined): string {
   return value;
 }
 
+/**
+ * Creates handlers for listing, retrieving, creating, updating, and deleting tasks.
+ *
+ * Requests use the `id` path parameter for item routes and a validated task body
+ * for create and update routes. Successful responses return `200` with task data,
+ * `201` with the created task, or `204` after deletion. Invalid or missing IDs
+ * produce a `400` error, and unknown task IDs produce a `404` error.
+ *
+ * @param repository Task persistence used by the handlers.
+ */
 export function createTaskRouter(repository: TaskRepository): Router {
   const router = Router();
 
