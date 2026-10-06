@@ -2,11 +2,46 @@ import { randomUUID } from "node:crypto";
 
 import type { CreateTaskInput, Task, UpdateTaskInput } from "../models/task.js";
 
+export interface TaskPage {
+  data: Task[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export class TaskRepository {
   private readonly tasks: Task[] = [];
 
   list(): Task[] {
     return [...this.tasks];
+  }
+
+  listPage(limit: number, cursor?: string): TaskPage | undefined {
+    const sortedTasks = this.list().sort(
+      (a, b) =>
+        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+    );
+    const cursorIndex =
+      cursor === undefined
+        ? -1
+        : sortedTasks.findIndex((task) => task.id === cursor);
+
+    if (cursor !== undefined && cursorIndex === -1) {
+      return undefined;
+    }
+
+    const startIndex = cursorIndex + 1;
+    const data = sortedTasks.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + data.length < sortedTasks.length;
+    const lastTask = data[data.length - 1];
+
+    return {
+      data,
+      nextCursor:
+        hasMore && lastTask !== undefined
+          ? Buffer.from(lastTask.id, "utf8").toString("base64")
+          : null,
+      hasMore,
+    };
   }
 
   findById(id: string): Task | undefined {

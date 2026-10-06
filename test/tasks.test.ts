@@ -13,11 +13,15 @@ describe("task management API", () => {
     assert.deepEqual(response.body, { status: "ok" });
   });
 
-  it("returns an empty task list", async () => {
+  it("returns an empty paginated task list", async () => {
     const response = await request(createApp()).get("/tasks");
 
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, []);
+    assert.deepEqual(response.body, {
+      data: [],
+      nextCursor: null,
+      hasMore: false,
+    });
   });
 
   it("creates and retrieves a task", async () => {
@@ -44,7 +48,7 @@ describe("task management API", () => {
     assert.deepEqual(getResponse.body, createResponse.body);
   });
 
-  it("lists created tasks", async () => {
+  it("lists created tasks in a paginated response", async () => {
     const app = createApp();
     const created = await request(app).post("/tasks").send({
       title: "List task",
@@ -53,7 +57,105 @@ describe("task management API", () => {
     const response = await request(app).get("/tasks");
 
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, [created.body]);
+    assert.deepEqual(response.body, {
+      data: [created.body],
+      nextCursor: null,
+      hasMore: false,
+    });
+  });
+
+  it("paginates tasks using base64 task ID cursors", async () => {
+    const app = createApp();
+    for (let index = 0; index < 7; index += 1) {
+      await request(app).post("/tasks").send({ title: `Task ${index}` });
+    }
+
+    const firstPage = await request(app).get("/tasks?limit=5");
+    assert.equal(firstPage.status, 200);
+    assert.equal(firstPage.body.data.length, 5);
+    assert.equal(firstPage.body.hasMore, true);
+    assert.equal(typeof firstPage.body.nextCursor, "string");
+
+    const cursorId = Buffer.from(firstPage.body.nextCursor, "base64").toString(
+      "utf8",
+    );
+    assert.equal(firstPage.body.data.at(-1)?.id, cursorId);
+
+    const secondPage = await request(app).get("/tasks").query({
+      limit: 5,
+      cursor: firstPage.body.nextCursor,
+    });
+    assert.equal(secondPage.status, 200);
+    assert.equal(secondPage.body.data.length, 2);
+    assert.equal(secondPage.body.nextCursor, null);
+    assert.equal(secondPage.body.hasMore, false);
+    assert.equal(
+      new Set([
+        ...firstPage.body.data.map((task: { id: string }) => task.id),
+        ...secondPage.body.data.map((task: { id: string }) => task.id),
+      ]).size,
+      7,
+    );
+  });
+
+  it("defaults to 20 tasks and sorts newest first", async () => {
+    const app = createApp();
+    const createdTasks: Array<{ id: string; createdAt: string }> = [];
+    for (let index = 0; index < 21; index += 1) {
+      const response = await request(app)
+        .post("/tasks")
+        .send({ title: `Task ${index}` });
+      createdTasks.push(response.body);
+    }
+
+    const expected = [...createdTasks].sort(
+      (a, b) =>
+        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+    );
+    const firstPage = await request(app).get("/tasks");
+
+    assert.equal(firstPage.status, 200);
+    assert.equal(firstPage.body.data.length, 20);
+    assert.equal(firstPage.body.hasMore, true);
+    assert.deepEqual(
+      firstPage.body.data.map((task: { id: string }) => task.id),
+      expected.slice(0, 20).map((task) => task.id),
+    );
+
+    const secondPage = await request(app).get("/tasks").query({
+      cursor: firstPage.body.nextCursor,
+    });
+    assert.equal(secondPage.body.data.length, 1);
+    assert.equal(secondPage.body.hasMore, false);
+    assert.deepEqual(
+      secondPage.body.data.map((task: { id: string }) => task.id),
+      expected.slice(20).map((task) => task.id),
+    );
+
+    const maximumPage = await request(app).get("/tasks?limit=100");
+    assert.equal(maximumPage.body.data.length, 21);
+    assert.equal(maximumPage.body.hasMore, false);
+  });
+
+  it("rejects invalid pagination parameters", async () => {
+    const app = createApp();
+
+    for (const limit of ["0", "101", "1.5", "abc"]) {
+      const response = await request(app).get("/tasks").query({ limit });
+      assert.equal(response.status, 400);
+      assert.deepEqual(response.body, {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "limit must be an integer between 1 and 100",
+        },
+      });
+    }
+
+    for (const cursor of ["not-base64", Buffer.from("missing").toString("base64")]) {
+      const response = await request(app).get("/tasks").query({ cursor });
+      assert.equal(response.status, 400);
+      assert.equal(response.body.error.code, "VALIDATION_ERROR");
+    }
   });
 
   it("replaces a task", async () => {

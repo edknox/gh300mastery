@@ -37,8 +37,74 @@ function getTaskId(value: string | string[] | undefined): string {
 export function createTaskRouter(repository: TaskRepository): Router {
   const router = Router();
 
-  router.get("/", (_req, res) => {
-    res.status(200).json(repository.list());
+  router.get("/", (req, res, next) => {
+    const limitValue = req.query.limit;
+    let limit = 20;
+
+    if (limitValue !== undefined) {
+      if (
+        typeof limitValue !== "string" ||
+        !/^[1-9]\d*$/.test(limitValue) ||
+        Number(limitValue) > 100
+      ) {
+        next(
+          new AppError(
+            400,
+            "VALIDATION_ERROR",
+            "limit must be an integer between 1 and 100",
+          ),
+        );
+        return;
+      }
+      limit = Number(limitValue);
+    }
+
+    const cursorValue = req.query.cursor;
+    let cursor: string | undefined;
+    if (cursorValue !== undefined) {
+      if (typeof cursorValue !== "string" || cursorValue.length === 0) {
+        next(
+          new AppError(
+            400,
+            "VALIDATION_ERROR",
+            "cursor must be a valid base64-encoded task ID",
+          ),
+        );
+        return;
+      }
+
+      const decoded = Buffer.from(cursorValue, "base64");
+      const decodedId = decoded.toString("utf8");
+      if (
+        decoded.length === 0 ||
+        decoded.toString("base64") !== cursorValue ||
+        !Buffer.from(decodedId, "utf8").equals(decoded)
+      ) {
+        next(
+          new AppError(
+            400,
+            "VALIDATION_ERROR",
+            "cursor must be a valid base64-encoded task ID",
+          ),
+        );
+        return;
+      }
+      cursor = decodedId;
+    }
+
+    const page = repository.listPage(limit, cursor);
+    if (page === undefined) {
+      next(
+        new AppError(
+          400,
+          "VALIDATION_ERROR",
+          "cursor does not identify an existing task",
+        ),
+      );
+      return;
+    }
+
+    res.status(200).json(page);
   });
 
   router.get("/:id", (req, res, next) => {
